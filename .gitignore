@@ -226,3 +226,6 @@ todo/output/
 # Claude가 git commit을 대신 작성해두는 커밋 메시지 초안 (~/.claude/CLAUDE.md의 "Git commit" 규칙 참고).
 # 커밋 대상이 아니라 사용자가 확인/수정 후 직접 commit할 때 쓰는 임시 파일이므로 git에는 남기지 않는다.
 mm.md
+live_profile/
+.live_browser_run/
+output/

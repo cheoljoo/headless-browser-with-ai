@@ -1,12 +1,18 @@
 # headless-browser-with-ai
 
 Linux 서버에서 AI를 활용할 때 ego lite, aside와 같은 방식으로 화면을 스크랩(scrap)하는
-기능을 우선 제공하는 프로젝트입니다. AI 세션 없이 사람이 직접 실행/조작할 수 있는
-두 가지 도구를 제공한다:
+기능을 우선 제공하는 프로젝트입니다. 다음 도구들을 제공한다:
 
-- `scripts/url_to_pdf.sh` — URL을 PDF/PNG로 정적 렌더링(로그인 불필요한 페이지용)
-- `scripts/live_browser.sh` — noVNC로 실제 화면을 보며 로그인 등 직접 조작이 필요한
-  페이지용 (로그인 세션은 프로필에 저장되어 유지됨, 여러 개 동시 실행 가능)
+- `scripts/url_to_pdf.sh` — URL을 PDF/PNG로 정적 렌더링(로그인 불필요한 페이지용, AI 개입 없이 사용)
+- `scripts/live_browser.sh` — Xvfb+x11vnc+noVNC로 직접 조립한 버전. noVNC로 실제
+  화면을 보며 로그인 등 직접 조작이 필요한 페이지용 (로그인 세션은 프로필에 저장되어
+  유지됨, 여러 개 동시 실행 가능)
+- `scripts/steel_browser.sh` — 위와 같은 목적을 self-host [Steel](https://steel.dev/)
+  Docker 컨테이너로 구현한 버전. 사람은 웹 UI로 화면을 보며 개입하고, AI는 CDP로
+  DOM을 직접 조회·조작할 수 있어 `live_browser.sh`의 `xdotool` 눈먼 클릭보다 정밀하다
+  (Docker가 되는 환경 전용)
+- `scripts/send_screenshot_report.py` — 캡처한 화면(PNG) + 설명을 담은 JSON을 읽어
+  사내 SMTP 릴레이로 HTML 리포트 메일을 보낸다
 
 ## URL → PDF/PNG 렌더링 (AI 개입 없이 사용)
 
@@ -120,8 +126,10 @@ sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
 ./scripts/live_browser.sh list                    # 실행 중인 모든 세션과 접속 주소 목록
 ```
 
-시작하면 그 세션에 할당된 주소가 출력된다. 그 주소를 아무 브라우저에서나 열어
-화면을 보며 로그인 등을 직접 진행한다:
+시작하면 그 세션에 할당된 주소가 출력된다(IP는 `hostname -I`로 자동 감지해
+채워주므로 바로 복사해서 열면 된다 — 감지에 실패하거나 NIC가 여러 개라 다른
+IP로 접속해야 하면 출력된 주소의 IP 부분만 직접 바꾸면 된다). 그 주소를
+아무 브라우저에서나 열어 화면을 보며 로그인 등을 직접 진행한다:
 
 ```
 http://<이 서버의 IP>:<세션별 WEB_PORT>/vnc.html
@@ -197,6 +205,116 @@ http://<이 서버의 IP>:<세션별 WEB_PORT>/vnc.html
   재로그인 없이 세션이 그대로 유지되는 것을 확인했다.
 - 서로 다른 URL로 세션 두 개(`siteA`, `siteB`)를 동시에 띄워 각각 6080/6081
   포트로 독립적으로 접속·렌더링되는 것을 확인했다.
+
+## Steel 기반 라이브 브라우저 (Docker, 사람+AI 협업용)
+
+`scripts/steel_browser.sh`는 `live_browser.sh`와 같은 목적(사람이 화면을 보며
+로그인하고, 로그인 세션은 유지됨)을, Xvfb/x11vnc/noVNC를 직접 조립하는 대신
+self-host [Steel](https://steel.dev/) ([github.com/steel-dev/steel-browser](https://github.com/steel-dev/steel-browser))
+Docker 컨테이너로 구현한 버전이다. 하나의 컨테이너가 다음 두 채널을 함께
+제공한다:
+
+- **Live View(Session Player)**: 사람이 웹 브라우저로 열어 화면을 보며 로그인
+  등을 직접 조작하는 곳 (noVNC의 `vnc.html`에 해당).
+- **CDP(Chrome DevTools Protocol) 엔드포인트**: AI가 DOM을 직접 조회하고
+  요소가 실제로 클릭 가능한 상태인지 확인한 뒤 조작하는 곳. `live_browser.sh`
+  절에서 겪었던 "`xdotool` 눈먼 클릭이 실패하는 문제"(위 "참고" 절 참고)를
+  구조적으로 피할 수 있다.
+
+### 요구 사항
+
+- `docker` (데몬 실행 중이어야 함)
+- 최초 1회 이미지 pull: `docker pull ghcr.io/steel-dev/steel-browser`
+  (사내망 등 `ghcr.io` 접근이 막힌 환경에서는 사용할 수 없다 — 그럴 땐
+  `live_browser.sh`를 대신 쓸 것)
+
+### 사용법
+
+```bash
+./scripts/steel_browser.sh start [URL] [SESSION]   # 세션 시작 (SESSION 기본값: default)
+./scripts/steel_browser.sh status [SESSION]        # 특정 세션 상태 확인
+./scripts/steel_browser.sh stop [SESSION]          # 세션 종료 (컨테이너 삭제)
+./scripts/steel_browser.sh list                    # 실행 중인 모든 세션과 주소 목록
+```
+
+시작하면 세 가지 주소가 출력된다(IP는 `hostname -I`로 자동 감지해서 바로
+채워준다. 예: `http://10.176.2.242:3001/v1/sessions/debug`처럼 실제 접속
+가능한 주소가 그대로 출력됨 — 감지 실패 시에만 `<이 서버 IP>` placeholder가
+남는다):
+
+```
+Live View(사람이 화면 보며 조작) : http://<이 서버 IP>:<API_PORT>/v1/sessions/debug
+Dashboard(세션 목록/설정)        : http://<이 서버 IP>:<API_PORT>/ui
+CDP endpoint(AI/Playwright용)   : http://<이 서버 IP>:<CDP_PORT>  (connectOverCDP)
+```
+
+`live_browser.sh`처럼 `SESSION` 이름을 다르게 주면 여러 개를 동시에 띄울 수
+있고, API 포트(기본 3000부터)와 CDP 포트(기본 9223부터)를 세션마다 자동으로
+겹치지 않게 할당한다.
+
+### 예시
+
+```bash
+# 로그인 페이지가 있는 사이트를 열어 직접 로그인
+./scripts/steel_browser.sh start "http://psncs.iptime.org/todo/"
+
+# 다른 세션을 하나 더 동시에 띄움
+./scripts/steel_browser.sh start "https://example.com" siteB
+
+./scripts/steel_browser.sh list
+# default: http://<서버 IP>:3001/v1/sessions/debug (CDP 9223)
+# siteB:   http://<서버 IP>:3002/v1/sessions/debug (CDP 9224)
+
+# AI는 CDP로 접속해 DOM 기준으로 조작 (예: Playwright)
+#   browser = playwright.chromium.connect_over_cdp("http://<서버 IP>:9223")
+# 또는 curl로 CDP HTTP API를 직접 호출해 새 탭을 특정 URL로 열 수도 있다:
+curl -X PUT "http://<서버 IP>:9223/json/new?https://example.com"
+
+./scripts/steel_browser.sh status siteB
+./scripts/steel_browser.sh stop siteB
+```
+
+### 환경변수
+
+| 변수 | 기본값 | 설명 |
+| --- | --- | --- |
+| `API_PORT` | 자동 할당(3000부터) | Steel 서버(웹 UI/REST API) 포트 |
+| `CDP_PORT` | 자동 할당(9223부터) | CDP(원격 디버깅) 포트 |
+| `WIDTH` / `HEIGHT` | `1600` / `900` | 세션 뷰포트 크기 |
+| `PROFILE_DIR` | `<repo>/steel_profile/<SESSION>` | Chrome 프로필(로그인 세션) 저장 위치 |
+
+### 주의사항 (실험적으로 확인한 내용)
+
+- **로그인 세션 유지**: `PROFILE_DIR`을 컨테이너의 `/tmp/steel-chrome`에
+  마운트해 재시작 후에도 쿠키가 남게 했다. 실제로 세션을 두 개 띄운 뒤 각
+  `steel_profile/<SESSION>/Default/` 아래에 `Cookies`, `Login Data` 등이
+  생성되는 것을 확인했다. 다만 이 경로는 steel-browser가 공식 문서화한
+  계약이 아니라 컨테이너 로그(`docker logs <컨테이너명>`)의
+  `"userDataDir": "/tmp/steel-chrome"` 항목을 보고 확인한 내부 구현
+  경로라, 이미지가 업데이트되면 깨질 수 있다.
+- **프로필 디렉터리 소유권**: 컨테이너가 root로 실행되므로
+  `steel_profile/<SESSION>/` 아래 파일들이 호스트에서 root 소유가 된다.
+  일반 사용자 권한으로 `rm -rf`가 안 먹을 수 있으니, 지울 때는
+  `docker run --rm -v "$PWD/steel_profile:/cleanup" alpine rm -rf /cleanup/<SESSION>`
+  처럼 컨테이너를 통해 지우거나 `sudo`를 쓸 것.
+  - `docker run --user "$(id -u):$(id -g)" ...`로 애초에 root가 아닌 내
+    계정으로 띄워서 이 문제 자체를 피할 수 있는지 시도해봤지만, 이 이미지는
+    비-root 실행을 지원하지 않아 **실패했다**: (1) 기본값(nginx 사용)으로는
+    `mkdir() "/var/lib/nginx/body" failed (13: Permission denied)`로 컨테이너가
+    즉시 죽고, (2) `--no-nginx`로 nginx를 건너뛰어도 이번엔 브라우저 실행 쪽에서
+    `uv_os_get_passwd returned ENOENT`(컨테이너의 `/etc/passwd`에 호스트 UID에
+    해당하는 계정이 없어서 발생)로 Chrome 실행 자체가 실패한다. 완전히 고치려면
+    `/etc/passwd`·`/etc/group`에 그 UID/GID 항목을 심고 `/var/lib/nginx`,
+    `/var/log/nginx`, `/run` 등 여러 root 소유 경로를 tmpfs로 다시 마운트해야
+    하는데, 이미지가 공식 지원하지 않는 조합을 억지로 짜맞추는 것이라 이미지
+    업데이트마다 깨질 위험이 크다고 판단해 적용하지 않았다. 그래서 지금 스크립트는
+    root 실행을 유지하고, 위 컨테이너 경유 삭제 방법으로 우회한다.
+- **CDP로 새 탭 열기**: CDP의 레거시 HTTP API(`PUT /json/new?<url>`, 포트
+  9223)로 별도 웹소켓 클라이언트 없이 `curl`만으로 특정 URL을 새 탭에 열 수
+  있는 것을 확인했다(`GET`이 아니라 `PUT`이어야 한다).
+- **세션은 컨테이너당 1개**: `POST /v1/sessions`를 다시 호출하면 기존
+  세션을 대체한다(브라우저가 재시작됨) — 세션을 여러 개 동시에 쓰고 싶으면
+  `live_browser.sh`처럼 컨테이너/세션 자체를 여러 개 띄워야 한다.
 
 ## 사용례: AI가 noVNC로 화면을 조작하며 정보를 수집해 메일로 보고하기
 

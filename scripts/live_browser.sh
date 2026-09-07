@@ -90,6 +90,12 @@ find_free_display() {
   echo "$n"
 }
 
+# 이 서버의 IP를 추정해 접속 주소를 바로 복사해 쓸 수 있게 한다(여러 NIC가
+# 있으면 첫 번째 것을 고르므로, 그게 아니라면 직접 확인해서 바꿀 것).
+host_ip() {
+  hostname -I 2>/dev/null | awk '{print $1}'
+}
+
 # --- 세션 디렉터리/상태 -----------------------------------------------------
 session_dir() { echo "$SESSIONS_ROOT/$1"; }
 pid_file() { echo "$(session_dir "$1")/$2.pid"; }
@@ -170,9 +176,16 @@ start() {
     > "$sdir/chrome.log" 2>&1 &
   echo $! > "$(pid_file "$session" chrome)"
 
+  local ip
+  ip="$(host_ip)"
+
   echo
   echo "실행 완료. 아래 주소를 웹 브라우저로 열어 화면을 보며 로그인 등을 직접 진행하세요:"
-  echo "  http://<이 서버 IP>:$wport/vnc.html"
+  if [ -n "$ip" ]; then
+    echo "  http://$ip:$wport/vnc.html"
+  else
+    echo "  http://<이 서버 IP>:$wport/vnc.html   (IP 자동 감지 실패, 직접 확인해서 채울 것)"
+  fi
   echo "로그인한 세션은 '$profile' 에 저장되어 다음 실행에도 유지됩니다."
   echo "다른 세션을 추가로 띄우려면 SESSION 이름을 다르게 지정하세요: $0 start <URL> <다른이름>"
 }
@@ -216,6 +229,9 @@ status() {
 
 list() {
   local found=0
+  local ip
+  ip="$(host_ip)"
+  ip="${ip:-<이 서버 IP>}"
   if [ -d "$SESSIONS_ROOT" ]; then
     for sdir in "$SESSIONS_ROOT"/*/; do
       [ -d "$sdir" ] || continue
@@ -223,7 +239,7 @@ list() {
       session="$(basename "$sdir")"
       if session_running "$session"; then
         load_session_env "$session"
-        echo "$session: http://<이 서버 IP>:${WEB_PORT:-?}/vnc.html (VNC ${VNC_PORT:-?}, DISPLAY ${DISPLAY_NUM:-?})"
+        echo "$session: http://$ip:${WEB_PORT:-?}/vnc.html (VNC ${VNC_PORT:-?}, DISPLAY ${DISPLAY_NUM:-?})"
         found=1
       fi
     done

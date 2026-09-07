@@ -291,6 +291,101 @@ AI가 한 일: 기존 `~/code/ccr/sendmail.py`(사내 SMTP 릴레이로 메일 �
 네트워크에서만 동작한다. `--test`를 주면 실제 발송 없이 몇 장을 어떤 제목으로
 보낼지만 출력한다.
 
+## 참고: 유사 아키텍처와 개선 아이디어
+
+이 프로젝트가 택한 방식(Xvfb + x11vnc + noVNC + Chrome, 하나의 화면을 사람과
+AI가 함께 봄)은 "사람-AI 협업 브라우징"을 구현하는 여러 방법 중 하나다. 실제로
+`live_browser.sh`에 대해 AI 에이전트가 `xdotool`로 화면을 조작해보니(위
+"동작 확인 사례" 참고), **좌표만 보고 눈먼 클릭을 하다 보니 폼이 열렸는지
+닫혔는지조차 스크린샷을 찍어봐야 알 수 있었고, 어떤 사이트는 1초 안에 자동
+새로고침되어 그 틈을 맞추기 어려웠다.** 이 한계와 대안을 정리해둔다.
+
+### CDP(원격 디버깅 포트)를 병행하면 더 정확해진다
+
+**CDP(Chrome DevTools Protocol)** 란 Chrome/Chromium이 노출하는 JSON-RPC 기반
+원격 제어 프로토콜로, `--remote-debugging-port`로 브라우저를 띄우면 외부
+프로그램이 WebSocket으로 접속해 DOM 조회, JS 실행, 클릭/타이핑 이벤트 주입,
+네트워크 가로채기, 스크린샷/PDF 캡처 등을 할 수 있다. 크롬 개발자도구(F12)가
+화면에서 하는 일을 코드로 그대로 할 수 있게 해주는 것이라고 보면 된다.
+Puppeteer, Playwright(Chromium 드라이버), 그리고 아래에서 이야기할
+Browserless/Steel 모두 이 CDP 위에서 동작한다.
+
+지금 `live_browser.sh`가 띄우는 Chrome에 `--remote-debugging-port=9222`
+옵션만 추가하면, AI는 noVNC 화면을 눈으로 보며 좌표를 추측해 클릭하는 대신
+**CDP(Chrome DevTools Protocol)로 DOM을 직접 조회하고, 특정 엘리먼트가 실제로
+클릭 가능한 상태인지 확인한 뒤 JS로 값을 넣거나 클릭 이벤트를 보낼 수 있다.**
+같은 화면을 사람은 noVNC로 보면서 필요할 때(2FA, 캡차, 결제 승인 등) 직접
+마우스/키보드로 개입하고, AI는 CDP로 정밀하게 조작하는 두 채널을 병행하는
+구조다. 이번에 `xdotool` 눈먼 클릭이 실패했던 사례(비밀번호 입력 폼이
+자동 리셋되기 전에 클릭+입력을 못 맞춤)는 CDP를 썼다면 DOM 상태를 직접
+확인·조작할 수 있어 훨씬 안정적이었을 것이다. 다음에 이런 자동 조작이 필요하면
+`--remote-debugging-port` 추가와 Playwright/Puppeteer 연결을 우선 검토할 것.
+
+### 사람과 AI가 화면을 나눠 써야 한다면: 디스플레이 분리(멀티스페이스)
+
+지금 구조는 사람과 AI가 **같은 마우스 커서, 같은 화면**을 공유한다(동시에
+조작하면 커서가 서로 충돌한다). 만약 AI는 백그라운드에서 계속 작업하고,
+사람은 필요할 때만 잠깐 들여다보는 식으로 완전히 분리하고 싶다면, 같은 Chrome
+프로필(쿠키 등)을 서로 다른 `DISPLAY` 번호(예: 사람용 `:1`, AI 전용 `:99`)에서
+각각 띄우는 방법이 있다. AI가 2FA 등 사람 개입이 필요하다고 판단하면 알림을
+보내고, 그때만 `:99` 화면을 noVNC로 열어보게 하는 식이다. 지금 `live_browser.sh`는
+세션마다 디스플레이를 자동 할당하므로(README 위쪽 "여러 개 동시에 띄우기"
+참고), 같은 프로필 디렉터리를 두 세션에서 공유하도록 `PROFILE_DIR`를 맞춰주면
+비슷하게 흉내 낼 수 있다.
+
+### 헤드리스에서도 화면이 "제대로" 그려지는 이유
+
+`live_browser.sh`는 실제 화면(Xvfb)을 띄우지만, 완전히 헤드리스로 돌리는
+`url_to_pdf.sh`도 스크린샷/PDF가 깨지지 않고 나온다. 이는 브라우저의 렌더링
+파이프라인(레이아웃→페인트→래스터화)이 "모니터에 빛을 쏘는 단계(Scanout)"
+직전, 즉 **메모리 버퍼에 픽셀을 채우는 단계까지는 실제 디스플레이 장치 유무와
+무관하게 항상 수행되기 때문**이다(GPU가 없으면 SwiftShader/Mesa llvmpipe 같은
+소프트웨어 래스터라이저가 대신 계산한다). 반대로 말하면, `--virtual-time-budget`
+을 늘려도 페이지가 여전히 깨져 보인다면 레이아웃 자체가 안 끝난 게 아니라
+지연 로딩(`IntersectionObserver`, 스크롤 기반 로딩) 때문에 필요한 네트워크
+요청이 아직 트리거되지 않았을 가능성을 먼저 의심해볼 것.
+
+### 비슷한 목적의 기존 오픈소스 스택
+
+바닥부터 셸 스크립트로 구성하는 대신 쓸 수 있는 패키징된 대안들:
+
+- **[Browserless](https://www.browserless.io/)** — 웹사이트/소개.
+  self-host용 오픈소스 코드는 [github.com/browserless/browserless](https://github.com/browserless/browserless).
+  Docker 컨테이너 하나로 Headless Chrome + CDP 디버거 + 사람이 마우스로 개입할
+  수 있는 Live Debugger UI를 한 번에 제공. 오픈소스판과 별도로 상용
+  클라우드/엔터프라이즈 티어도 운영한다.
+- **[Steel](https://steel.dev/)** — 웹사이트/소개("open source browser API
+  that lets you control fleets of browsers in the cloud"). self-host용
+  코드는 [github.com/steel-dev/steel-browser](https://github.com/steel-dev/steel-browser)
+  (Python SDK: [steel-dev/steel-python](https://github.com/steel-dev/steel-python),
+  예제: [steel-dev/steel-cookbook](https://github.com/steel-dev/steel-cookbook)).
+  세션 유지, 프록시, 쿠키 관리, 자동 CAPTCHA 해결과 함께 사람이 언제든 볼 수
+  있는 Live View Session을 내장한, 처음부터 **AI 에이전트용**으로 설계된
+  오픈소스 브라우저 인프라.
+
+두 도구를 비교하면:
+
+| 기준 | Browserless | Steel |
+| --- | --- | --- |
+| 태생 | 헤드리스 크롬을 스케일 있게 돌리기(스크래핑/PDF 대량생산)에서 출발 | 처음부터 "AI 에이전트용 브라우저 인프라"로 설계 |
+| Live View(사람 개입) | 있지만 부가 기능에 가까움 | 세션 지속성·프록시·쿠키 관리와 함께 핵심 기능으로 다뤄짐 |
+| 라이선스/운영 모델 | 오픈소스 버전 + 상용 클라우드/엔터프라이즈 티어 병행 | 완전 오픈소스, self-host 전제로 설계되어 별도 계정/API 키 없이도 온전히 동작 |
+| 이 리포지토리와의 궁합 | `url_to_pdf.sh`처럼 대량 스크린샷/PDF 생성을 스케일업할 때 강점 | `live_browser.sh`가 하려는 "로그인 세션 유지 + 사람 개입" 워크플로우와 사상이 거의 동일 |
+
+**둘 중 고른다면 Steel을 추천한다.** Browserless는 "많이, 빠르게 헤드리스로
+돌리기"에 최적화된 반면, Steel은 "세션을 유지하면서 사람이 언제든 들여다볼 수
+있게 하기"에 최적화되어 있는데, `live_browser.sh`가 풀려는 문제가 정확히
+후자이기 때문이다. 사내망처럼 외부 SaaS 계정 연동이 부담스러운 폐쇄망
+환경에서도 Steel은 순수 self-host로 완결되어 있어, 지금 구조(Xvfb+noVNC를
+직접 짠 것)를 컨테이너 하나로 대체하는 그림이 자연스럽다. 다만 두 프로젝트
+다 변화가 빠른 오픈소스라 실제 도입 전에는 각 저장소에서 최신 라이선스/기능
+구성을 다시 확인할 것.
+
+이 리포지토리는 위 도구들을 쓰지 않고 `xvfb`/`x11vnc`/`novnc`만으로 최소
+구성한 버전이라고 보면 된다. 사내망 등 외부 이미지를 끌어올 수 없는 환경이거나
+가볍게 셸 스크립트로만 관리하고 싶을 때 적합하고, 세션 관리/프록시/멀티유저
+같은 기능이 필요해지면 위 도구로 옮겨가는 걸 고려할 만하다.
+
 ## License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.

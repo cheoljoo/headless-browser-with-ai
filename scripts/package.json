@@ -1,0 +1,8 @@
+{
+  "name": "headless-browser-with-ai-scripts",
+  "private": true,
+  "description": "cdp_client.js가 쓰는 최소 의존성",
+  "dependencies": {
+    "ws": "^8.21.3"
+  }
+}

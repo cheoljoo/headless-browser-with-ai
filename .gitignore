@@ -231,3 +231,5 @@ live_profile/
 steel_profile/
 .steel_browser_run/
 output/
+scripts/node_modules/
+scripts/package-lock.json

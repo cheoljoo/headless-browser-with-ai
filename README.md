@@ -13,6 +13,10 @@ Linux 서버에서 AI를 활용할 때 ego lite, aside와 같은 방식으로 �
   (Docker가 되는 환경 전용)
 - `scripts/send_screenshot_report.py` — 캡처한 화면(PNG) + 설명을 담은 JSON을 읽어
   사내 SMTP 릴레이로 HTML 리포트 메일을 보낸다
+- `scripts/cdp_client.js` + `.claude/skills/steel-cdp-browse/` — Steel 세션에 CDP로 붙어
+  스크린샷 대신 DOM 텍스트로 크롤링/로그인하는 클라이언트와, 그 워크플로우를 담은 Claude
+  Code skill. `make skill-install`로 `~/.claude/skills/`에 설치하면 다른 프로젝트에서도
+  재사용 가능
 
 ## URL → PDF/PNG 렌더링 (AI 개입 없이 사용)
 
@@ -220,6 +224,14 @@ Docker 컨테이너로 구현한 버전이다. 하나의 컨테이너가 다음 
   요소가 실제로 클릭 가능한 상태인지 확인한 뒤 조작하는 곳. `live_browser.sh`
   절에서 겪었던 "`xdotool` 눈먼 클릭이 실패하는 문제"(위 "참고" 절 참고)를
   구조적으로 피할 수 있다.
+
+`scripts/cdp_client.js`는 이 CDP 엔드포인트에 붙어 화면을 스크린샷으로 찍어 vision으로
+해석하는 대신 **DOM 텍스트를 직접 읽어 크롤링**하는 최소 클라이언트다(`evaluate`/`click`/
+`navigate`/`screenshot`/`login` 5개 커맨드). 이 전체 워크플로우(세션 시작 → Live View 주소
+안내 → CDP로 탐색·크롤링·로그인)는 Claude Code skill `steel-cdp-browse`로 정리되어 있으며,
+`make skill-install`로 `~/.claude/skills/`에 설치하면 이 리포지토리가 아닌 다른 프로젝트에서
+작업 중이어도 "이 사이트 열어서 정보 가져와줘" 같은 요청에 바로 재사용할 수 있다. skill
+정의는 `.claude/skills/steel-cdp-browse/SKILL.md` 참고.
 
 ### 요구 사항
 

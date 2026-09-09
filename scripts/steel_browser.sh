@@ -96,11 +96,12 @@ start() {
     exit 1
   fi
 
-  local api_port cdp_port profile
+  local api_port cdp_port profile ip
   api_port="${API_PORT:-$(find_free_port 3000)}"
   cdp_port="${CDP_PORT:-$(find_free_port 9223)}"
   profile="${PROFILE_DIR:-$ROOT_DIR/steel_profile/$session}"
   mkdir -p "$profile"
+  ip="$(host_ip)"
 
   {
     echo "API_PORT=$api_port"
@@ -109,8 +110,22 @@ start() {
   } > "$(env_file "$session")"
 
   echo "[세션: $session] Steel 컨테이너 시작 (API 포트 $api_port, CDP 포트 $cdp_port)"
+  # DOMAIN을 안 주면 steel-browser가 자기 주소를 기본값 0.0.0.0으로 알고 있어서, Live View
+  # 페이지(HTML)에 박히는 WebSocket 접속 주소도 ws://0.0.0.0:<PORT>/...가 된다. 이건 그 페이지를
+  # 보는 사람 브라우저 입장에서 "0.0.0.0=자기 자신의 PC"로 풀리므로, 원격(예: Windows)에서
+  # noVNC처럼 접속하면 화면이 "Session Offline"으로 뜨는 원인이 된다(포트포워딩 문제가 아님 —
+  # CDP/REST API 자체는 정상 동작하는데 이 HTML에 박히는 값만 잘못됨). 실제로 외부에서 접속할
+  # host:port를 DOMAIN으로 명시해 이 문제를 막는다.
+  local domain="${DOMAIN:-}"
+  [ -z "$domain" ] && [ -n "$ip" ] && domain="$ip:$api_port"
+  if [ -z "$domain" ]; then
+    echo "  ⚠ 이 서버의 IP를 자동 감지하지 못해 DOMAIN을 못 넣었습니다 — Live View가 외부에서" >&2
+    echo "    'Session Offline'으로 보일 수 있습니다. 필요하면 DOMAIN=<IP>:$api_port 환경변수로 직접 지정할 것." >&2
+  fi
+
   docker run -d --name "$(container_name "$session")" \
     -p "$api_port:3000" -p "$cdp_port:9223" \
+    ${domain:+-e "DOMAIN=$domain"} \
     -v "$profile:/tmp/steel-chrome" \
     "$IMAGE" > "$sdir/container_id" 2> "$sdir/docker_run.log" \
     || { echo "docker run 실패 (자세한 내용: $sdir/docker_run.log)" >&2; exit 1; }

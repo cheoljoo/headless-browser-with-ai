@@ -315,6 +315,23 @@ curl -X PUT "http://<서버 IP>:9223/json/new?https://example.com"
 - **세션은 컨테이너당 1개**: `POST /v1/sessions`를 다시 호출하면 기존
   세션을 대체한다(브라우저가 재시작됨) — 세션을 여러 개 동시에 쓰고 싶으면
   `live_browser.sh`처럼 컨테이너/세션 자체를 여러 개 띄워야 한다.
+- **Live View가 원격에서 "Session Offline"으로 뜨는 문제 (Docker 포트포워딩
+  문제 아님)**: steel-browser는 `HOST` 환경변수를 안 주면 기본값 `0.0.0.0`으로
+  자기 주소를 알고, Live View(`/v1/sessions/debug`) 페이지의 HTML에 그 값 그대로
+  `ws://0.0.0.0:<PORT>/...`를 박아 넣는다. 이 페이지를 보는 사람의 브라우저는
+  `0.0.0.0`을 "자기 자신의 PC"로 해석해 연결을 시도하므로, 로컬(같은 서버)에서는
+  우연히 되더라도 다른 PC(예: Windows)에서 열면 반드시 실패한다 — CDP/REST API
+  자체(`curl`, `cdp_client.js`)는 포트포워딩만으로 계속 정상 동작하기 때문에
+  포트가 막힌 문제로 착각하기 쉽다. 그래서 `docker run`에 실제 접속
+  주소(`-e DOMAIN=<서버IP>:<API_PORT>`)를 넣어 해결했다(`steel_browser.sh`가
+  자동으로 `host_ip()` 값을 넣어준다). 확인법: `curl .../v1/sessions/debug |
+  grep baseWsUrl`로 `0.0.0.0`이 아니라 실제 IP가 박혀 있는지 볼 것.
+- **컨테이너를 강제 종료(`docker rm -f`)한 뒤 같은 `PROFILE_DIR`로 재시작하면
+  Chrome이 안 뜬다**: Chrome이 프로필 디렉터리에 남긴 `SingletonLock` 등 잠금
+  파일이 이전 컨테이너의 hostname을 가리킨 채 남아있어서, 새 컨테이너가
+  "다른 프로세스가 이 프로필을 쓰는 중"이라며 `POST /v1/sessions`가
+  `launch_failed`로 실패한다(`process_singleton_posix.cc` 에러). 지우고 재시작하면
+  해결됨: `docker run --rm -v "$PROFILE_DIR:/data" alpine rm -f /data/Singleton*`.
 
 ## 사용례: AI가 noVNC로 화면을 조작하며 정보를 수집해 메일로 보고하기
 
